@@ -13,6 +13,9 @@
 // - Allineamento automatico: nelle accentate composte dal plugin, quando sposti
 //   un'ancora o cambi la larghezza della lettera base o del segno, le accentate
 //   si riallineano da sole. Si può spegnere glifo per glifo.
+// - Gruppi di kerning: l'accentata entra negli stessi gruppi della lettera base
+//   (tranne il lato destro quando il segno sporge, come in ď ľ ť Ľ) e li segue
+//   quando cambiano.
 //
 // I comandi sono nel menu del tasto destro e nel menu Glyph dell'editor e, come
 // per "Rinomina e duplica glifi", nella panoramica del font.
@@ -449,6 +452,11 @@ function resolveParts(fontController, codePoint) {
     if (name) marks.push({ name, kind });
   }
 
+  // I gruppi di kerning vengono dalla lettera vera (i, non idotless)
+  const groupBaseName = baseName;
+  // Un segno che sporge a destra (caron a virgola, corno) cambia lo spazio a destra
+  const skipRight = marks.some((m) => m.kind === "topright");
+
   // i e j senza puntino sotto i segni in alto
   if (baseName && (baseChar === "i" || baseChar === "j") && marks.some((m) => m.kind === "top")) {
     const dotless = baseChar === "i"
@@ -456,7 +464,7 @@ function resolveParts(fontController, codePoint) {
       : firstExisting(fontController, ["jdotless", "dotlessj", "uni0237", glyphData.byCodePoint.get(0x0237)?.name]);
     if (dotless) baseName = dotless;
   }
-  return { baseName, marks, missing };
+  return { baseName, groupBaseName, skipRight, marks, missing };
 }
 
 // ---------------------------------------------------------------------------
@@ -625,7 +633,12 @@ function isComposite(varGlyph) {
 }
 
 function isAutoAligned(varGlyph) {
-  return !!varGlyph?.glyph?.customData?.[AUTO_ALIGN_KEY];
+  return varGlyph?.glyph?.customData?.[AUTO_ALIGN_KEY] === true;
+}
+
+// false = l'utente l'ha spento apposta: "Assegna gruppi" non tocca il glifo
+function isAutoAlignOff(varGlyph) {
+  return varGlyph?.glyph?.customData?.[AUTO_ALIGN_KEY] === false;
 }
 
 function markListForComponents(fontController, components) {
@@ -679,12 +692,122 @@ async function planRealign(fontController, glyphName, builder) {
 
 function setAutoAlignFlag(varGlyph, glyphName, value, builder) {
   const current = varGlyph.glyph.customData?.[AUTO_ALIGN_KEY];
-  if (!!current === value) return;
-  if (value) builder.set(["glyphs", glyphName, "customData"], AUTO_ALIGN_KEY, true, current);
-  else {
-    builder.forward.push({ p: ["glyphs", glyphName, "customData"], f: "d", a: [AUTO_ALIGN_KEY] });
-    builder.backward.unshift({ p: ["glyphs", glyphName, "customData"], f: "=", a: [AUTO_ALIGN_KEY, current] });
+  if (current === value) return;
+  builder.set(["glyphs", glyphName, "customData"], AUTO_ALIGN_KEY, value, current);
+}
+
+// ---------------------------------------------------------------------------
+// Gruppi di kerning: l'accentata va negli stessi gruppi della lettera base
+// ---------------------------------------------------------------------------
+
+// In Fontra: groupsSide2 = lato sinistro del glifo, groupsSide1 = lato destro
+const SIDE_LEFT = "groupsSide2";
+const SIDE_RIGHT = "groupsSide1";
+
+function groupOf(groups, glyphName) {
+  for (const [groupName, members] of Object.entries(groups || {})) {
+    if (members.includes(glyphName)) return groupName;
   }
+  return null;
+}
+
+function insertSorted(list, name) {
+  if (list.includes(name)) return list;
+  const result = [...list];
+  const index = result.findIndex((other) => name < other);
+  if (index >= 0) result.splice(index, 0, name);
+  else result.push(name);
+  return result;
+}
+
+const DOTLESS_TO_LETTER = { idotless: "i", dotlessi: "i", jdotless: "j", dotlessj: "j", uni0237: "j" };
+
+// Da quale lettera prende i gruppi un glifo che esiste già
+async function groupEntryFor(fontController, glyphName) {
+  const codePoint = fontController.glyphMap[glyphName]?.[0];
+  const parts = codePoint !== undefined ? resolveParts(fontController, codePoint) : null;
+  if (parts?.groupBaseName) {
+    return { name: glyphName, baseName: parts.groupBaseName, skipRight: parts.skipRight };
+  }
+  const varGlyph = await fontController.getGlyph(glyphName);
+  const layer = varGlyph?.glyph.layers[varGlyph.sources[0]?.layerName] || Object.values(varGlyph?.glyph.layers || {})[0];
+  const components = layer?.glyph.components || [];
+  if (components.length < 2) return null;
+  const first = components[0].name;
+  return {
+    name: glyphName,
+    baseName: DOTLESS_TO_LETTER[first] && DOTLESS_TO_LETTER[first] in fontController.glyphMap ? DOTLESS_TO_LETTER[first] : first,
+    skipRight: markListForComponents(fontController, components).some((m) => m.kind === "topright"),
+  };
+}
+
+// entries: [{ name, baseName, skipRight }]. Il glifo copia i gruppi della base
+// (anche "nessun gruppo"); con skipRight il lato destro non viene toccato.
+async function planGroupSync(fontController, entries, builder) {
+  const report = { changed: [], skippedRight: [] };
+  if (!entries.length) return report;
+  let table;
+  try {
+    table = (await fontController.getKerning())?.kern;
+  } catch (error) {
+    table = null;
+  }
+  if (!table) return report;
+  const changed = new Set();
+  for (const side of [SIDE_LEFT, SIDE_RIGHT]) {
+    const original = table[side] || {};
+    const work = Object.fromEntries(Object.entries(original).map(([g, members]) => [g, [...members]]));
+    for (const { name, baseName, skipRight } of entries) {
+      if (!baseName || name === baseName) continue;
+      if (side === SIDE_RIGHT && skipRight) {
+        report.skippedRight.push(name);
+        continue;
+      }
+      const target = groupOf(work, baseName);
+      const current = groupOf(work, name);
+      if (target === current) continue;
+      if (current) work[current] = work[current].filter((n) => n !== name);
+      if (target) work[target] = insertSorted(work[target], name);
+      changed.add(name);
+    }
+    for (const groupName of new Set([...Object.keys(original), ...Object.keys(work)])) {
+      const before = original[groupName];
+      const after = work[groupName];
+      if (JSON.stringify(before) === JSON.stringify(after)) continue;
+      const path = ["kerning", "kern", side];
+      if (!after?.length) {
+        // Gruppo rimasto vuoto: si toglie, come fa Fontra
+        builder.forward.push({ p: path, f: "d", a: [groupName] });
+        builder.backward.unshift({ p: path, f: "=", a: [groupName, clone(before)] });
+      } else {
+        builder.set(path, groupName, after, clone(before));
+      }
+    }
+  }
+  report.changed = [...changed];
+  return report;
+}
+
+// Dopo una modifica del plugin ai gruppi, la cache del kerning va svuotata
+// (anche nelle altre finestre)
+function listenForGroupChanges(fontController) {
+  // La panoramica di Fontra non riceve le modifiche al kerning fatte nelle altre
+  // finestre: senza questa iscrizione lavorerebbe su gruppi vecchi.
+  Promise.resolve(fontController.getKerning?.())
+    .then(() => fontController.subscribeChanges?.({ kerning: null }, false))
+    .catch(() => {});
+  fontController.addChangeListener(
+    { kerning: null },
+    (change) => {
+      if (!change?.[META_KEY]) return;
+      fontController.getKerningController?.("kern")?.then(
+        (kc) => kc.clearCaches(),
+        () => {}
+      );
+    },
+    false,
+    true
+  );
 }
 
 // Compone (o ricompone) un elenco di lettere: [{ glyphName, codePoint }].
@@ -692,7 +815,10 @@ function setAutoAlignFlag(varGlyph, glyphName, value, builder) {
 async function planCompose(fontController, targets, { replaceDrawn = false } = {}) {
   const anchorsBuilder = new ChangeBuilder();
   const glyphsBuilder = new ChangeBuilder();
-  const report = { created: [], recomposed: [], skippedDrawn: [], missing: new Map(), unattached: new Set(), anchored: [] };
+  const report = {
+    created: [], recomposed: [], skippedDrawn: [], missing: new Map(), unattached: new Set(), anchored: [],
+    groups: { changed: [], skippedRight: [] },
+  };
   const anchored = new Set();
   const plans = [];
 
@@ -733,6 +859,12 @@ async function planCompose(fontController, targets, { replaceDrawn = false } = {
       report.created.push(plan.targetName);
     }
   }
+
+  // Gruppi di kerning della lettera base
+  const groupEntries = plans
+    .filter((plan) => report.created.includes(plan.targetName) || report.recomposed.includes(plan.targetName))
+    .map((plan) => ({ name: plan.targetName, baseName: plan.parts.groupBaseName, skipRight: plan.parts.skipRight }));
+  report.groups = await planGroupSync(fontController, groupEntries, glyphsBuilder);
   return { anchorsBuilder, glyphsBuilder, report };
 }
 
@@ -830,6 +962,15 @@ function reportParagraphs(report) {
   if (report.recomposed.length) out.push({ text: `Ricomposti ${report.recomposed.length}: ${listNames(report.recomposed)}.` });
   if (report.anchored.length) {
     out.push({ text: `Ho aggiunto le ancore che mancavano a: ${listNames(report.anchored)}. Puoi spostarle: le accentate le seguono.` });
+  }
+  if (report.groups?.changed.length) {
+    out.push({ text: `Gruppi di kerning presi dalla lettera base: ${listNames(report.groups.changed)}.` });
+  }
+  if (report.groups?.skippedRight.length) {
+    out.push({
+      cls: "muted",
+      text: `Lato destro lasciato fuori dai gruppi perché il segno sporge: ${listNames(report.groups.skippedRight)}.`,
+    });
   }
   if (report.unattached.size) {
     out.push({
@@ -958,6 +1099,72 @@ class AutoAligner {
   }
 }
 
+// Quando cambia il gruppo di kerning di una lettera (per esempio dalla Barra
+// info), le sue accentate con l'allineamento automatico la seguono.
+function snapshotGroups(table) {
+  const snapshot = {};
+  for (const side of [SIDE_LEFT, SIDE_RIGHT]) {
+    snapshot[side] = new Map();
+    for (const [groupName, members] of Object.entries(table?.[side] || {})) {
+      for (const member of members) snapshot[side].set(member, groupName);
+    }
+  }
+  return snapshot;
+}
+
+class GroupFollower {
+  constructor(fontController) {
+    this.fontController = fontController;
+    this.snapshot = null;
+    fontController.getKerning?.().then(
+      (kerning) => (this.snapshot = snapshotGroups(kerning?.kern)),
+      () => {}
+    );
+    fontController.addChangeListener(
+      { kerning: null },
+      (change, isExternalChange) => this.onChange(change, isExternalChange),
+      false
+    );
+  }
+
+  async onChange(change, isExternalChange) {
+    try {
+      const kerning = await this.fontController.getKerning();
+      const next = snapshotGroups(kerning?.kern);
+      const previous = this.snapshot;
+      this.snapshot = next;
+      // Solo la finestra che ha fatto la modifica, e non per le modifiche del plugin
+      if (!previous || isExternalChange || !change || change[META_KEY]) return;
+
+      const moved = new Set();
+      for (const side of [SIDE_LEFT, SIDE_RIGHT]) {
+        for (const name of new Set([...previous[side].keys(), ...next[side].keys()])) {
+          if (previous[side].get(name) !== next[side].get(name)) moved.add(name);
+        }
+      }
+      if (!moved.size) return;
+
+      const entries = [];
+      for (const [glyphName, codePoints] of Object.entries(this.fontController.glyphMap)) {
+        const codePoint = codePoints?.[0];
+        if (codePoint === undefined || !decompose(codePoint)) continue;
+        const parts = resolveParts(this.fontController, codePoint);
+        if (!parts?.groupBaseName || !moved.has(parts.groupBaseName)) continue;
+        if (!isAutoAligned(await this.fontController.getGlyph(glyphName))) continue;
+        entries.push({ name: glyphName, baseName: parts.groupBaseName, skipRight: parts.skipRight });
+      }
+      const builder = new ChangeBuilder();
+      await planGroupSync(this.fontController, entries, builder);
+      if (builder.isEmpty) return;
+      const built = builder.build({ groups: true });
+      await this.fontController.applyChange(built.change);
+      await postChange(this.fontController, built.change, built.rollbackChange, "Gruppi di kerning delle accentate");
+    } catch (error) {
+      console.error("[Ancore e accentate] Gruppi di kerning:", error);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Editor
 // ---------------------------------------------------------------------------
@@ -970,6 +1177,8 @@ class EditorComposeAccents {
     this.moduleURL = moduleURL;
     loadGlyphData();
     this.aligner = new AutoAligner(this.fontController);
+    this.groupFollower = new GroupFollower(this.fontController);
+    listenForGroupChanges(this.fontController);
     this.installMenuItems();
     installAnchorShortcut((reset) => {
       if (this.selectedExistingName) this.setAnchors(reset);
@@ -1184,6 +1393,15 @@ class EditorComposeAccents {
         await this.fontController.applyChange({ c: realign.forward });
         builder.forward.push(...realign.forward);
         builder.backward.unshift(...realign.backward);
+        // e i gruppi di kerning della lettera base
+        const groups = new ChangeBuilder();
+        const entry = await groupEntryFor(this.fontController, name);
+        if (entry) await planGroupSync(this.fontController, [entry], groups);
+        if (!groups.isEmpty) {
+          await this.fontController.applyChange({ c: groups.forward });
+          builder.forward.push(...groups.forward);
+          builder.backward.unshift(...groups.backward);
+        }
       }
       this.autoAlignCache.set(name, turnOn);
       await this.commit([builder], turnOn ? "Attiva allineamento automatico" : "Disattiva allineamento automatico", name);
@@ -1251,6 +1469,7 @@ class OverviewComposeAccents {
     this.controller = controller;
     this.fontController = controller.fontController;
     loadGlyphData();
+    listenForGroupChanges(this.fontController);
     this.installMenuItems();
     this.installChunkedUndo();
     installAnchorShortcut((reset) => this.setAnchors(reset));
@@ -1295,6 +1514,14 @@ class OverviewComposeAccents {
         title: "Componi tutte le accentate latine…",
         enabled: () => !readOnly(),
         callback: () => this.composeAllLatin(),
+      },
+      {
+        title: () =>
+          this.selectedExistingNames.length
+            ? "Assegna gruppi di kerning dalle lettere base (selezione)"
+            : "Assegna gruppi di kerning dalle lettere base",
+        enabled: () => !readOnly(),
+        callback: () => this.assignGroups(),
       },
       {
         title: () => {
@@ -1414,6 +1641,58 @@ class OverviewComposeAccents {
       if (targets.length > 1 || report.anchored.length || report.unattached.size || report.missing.size || report.skippedDrawn.length) {
         showDialog("Componi accentate", reportParagraphs(report), [{ label: "OK", value: true, primary: true }]);
       }
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  // Le accentate selezionate (o tutte) prendono i gruppi della loro lettera base
+  async assignGroups() {
+    try {
+      await loadGlyphData();
+      const fc = this.fontController;
+      let names = this.selectedExistingNames;
+      const all = !names.length;
+      if (all) {
+        names = Object.entries(fc.glyphMap)
+          .filter(([, codePoints]) => codePoints?.[0] !== undefined && decompose(codePoints[0]))
+          .map(([name]) => name);
+      }
+      const entries = [];
+      const skippedOff = [];
+      for (const name of names) {
+        const varGlyph = await fc.getGlyph(name);
+        if (isAutoAlignOff(varGlyph)) {
+          skippedOff.push(name);
+          continue;
+        }
+        const entry = await groupEntryFor(fc, name);
+        if (entry) entries.push(entry);
+      }
+      const builder = new ChangeBuilder();
+      const report = await planGroupSync(fc, entries, builder);
+      if (!builder.isEmpty) {
+        await fc.applyChange({ c: builder.forward });
+        await this.commit([builder], "Assegna gruppi di kerning");
+      }
+      const paragraphs = [];
+      if (report.changed.length) {
+        const n = report.changed.length;
+        paragraphs.push({ text: `Gruppi della lettera base assegnati a ${n} ${n === 1 ? "glifo" : "glifi"}: ${listNames(report.changed)}.` });
+      } else {
+        paragraphs.push({
+          text: entries.length
+            ? "Niente da cambiare: le accentate sono già nei gruppi delle lettere base (o le lettere base non hanno gruppi)."
+            : "Nessuna lettera accentata da sistemare" + (all ? " nel font." : " nella selezione."),
+        });
+      }
+      if (report.skippedRight.length) {
+        paragraphs.push({ cls: "muted", text: `Lato destro lasciato fuori perché il segno sporge: ${listNames(report.skippedRight)}.` });
+      }
+      if (skippedOff.length) {
+        paragraphs.push({ cls: "muted", text: `Non toccate perché hai spento l'allineamento automatico: ${listNames(skippedOff)}.` });
+      }
+      showDialog("Gruppi di kerning", paragraphs, [{ label: "OK", value: true, primary: true }]);
     } catch (error) {
       showError(error);
     }

@@ -1,7 +1,7 @@
 {
   "name": "Ancore e accentate",
-  "description": "Come in Glyphs: ancore predefinite con ⌘U, costruzione automatica delle lettere accentate dai segni *comb e allineamento automatico quando sposti le ancore. Dall'editor e dalla panoramica del font.",
-  "version": "1.0.0",
+  "description": "Come in Glyphs: ancore predefinite con ⌘U, costruzione automatica delle lettere accentate dai segni *comb, con i gruppi di kerning della lettera base, e allineamento automatico quando sposti le ancore. Dall'editor e dalla panoramica del font.",
+  "version": "1.1.0",
   "init": "compose-accents.js",
   "function": "start"
 }

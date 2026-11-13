@@ -5,6 +5,7 @@ Porta in Fontra il modo di lavorare di Glyphs con le lettere accentate:
 1. **Ancore** messe da sole nei punti giusti, in tutti i master.
 2. **Costruzione automatica** delle lettere accentate con i componenti: lettera base + segni `*comb`.
 3. **Allineamento automatico**: sposti un'ancora e tutte le accentate che la usano si aggiornano.
+4. **Gruppi di kerning**: le accentate entrano negli stessi gruppi della lettera base e li seguono.
 
 ## Dove si trovano i comandi
 
@@ -67,9 +68,26 @@ tutte le accentate che li usano si riallineano da sole, in ogni master, appena r
 
 Come in Glyphs, in un'accentata allineata in automatico i segni non si spostano a mano: tornano al loro posto. Per spostarli liberamente, tasto destro sull'accentata e togli la spunta da **Allineamento automatico**. Rimettendo la spunta, l'accentata si riallinea subito. Per riallineare una composta fatta a mano (con i componenti già messi), basta accendere la spunta.
 
+## 4. Gruppi di kerning
+
+Un'accentata appena composta entra negli **stessi gruppi di kerning della lettera base**, a sinistra e a destra: `aacute`, `adieresis` e `aogonek` vanno dove sta `a`, `ccedilla` dove sta `c`. Così prendono subito tutto il kerning fatto sui gruppi.
+
+- **i e j**: `iacute` prende i gruppi di `i`, non di `idotless`.
+- **Lato destro libero quando il segno sporge**: in ď, ľ, ť e Ľ il caron a virgola cambia lo spazio a destra. Lì l'accentata entra solo nel gruppo sinistro, e il kerning a destra resta da fare a parte. Vale anche per le lettere con il corno (ơ, ư).
+- **Le accentate seguono la lettera base**: se sposti la `a` in un altro gruppo, per esempio dalla Barra info, tutte le sue accentate con l'allineamento automatico la seguono. Se la `a` esce da un gruppo, escono anche loro.
+- **Eccezioni**: per tenere un'accentata in un gruppo diverso, toglile la spunta da **Allineamento automatico** e poi assegnale il gruppo che vuoi. Rimettendo la spunta torna nei gruppi della lettera base.
+
+Il kerning fatto direttamente su una coppia di glifi, senza gruppi (per esempio `a`–`v`), resta della lettera: le accentate lo prendono solo attraverso i gruppi.
+
+**Per le accentate che hai già**, nella panoramica: **Assegna gruppi di kerning dalle lettere base**.
+
+- Con dei glifi selezionati sistema solo quelli, altrimenti tutte le lettere accentate del font. Vale anche per quelle disegnate a mano: l'importante è che abbiano il loro Unicode (á, é…).
+- Le accentate con l'allineamento automatico spento non vengono toccate.
+- Alla fine un resoconto ti dice cosa è cambiato.
+
 ## Annulla
 
-- **⌘Z** annulla ogni comando. "Componi tutte le accentate latine" si annulla in un passo solo.
+- **⌘Z** annulla ogni comando, gruppi di kerning compresi. "Componi tutte le accentate latine" si annulla in un passo solo.
 - L'allineamento automatico segue l'annullamento: se annulli lo spostamento di un'ancora, le accentate tornano dov'erano.
 
 ## Note
@@ -82,6 +100,8 @@ Come in Glyphs, in un'accentata allineata in automatico i segni non si spostano 
 
 1. Crea un repository **pubblico** su GitHub, per esempio `fontra-compose-accents`.
 2. Carica `plugin.json` e `compose-accents.js` (va bene anche questo README) nella radice del repository.
-3. Crea una release con tag `v1.0.0`.
-4. In Fontra apri **Fontra → Plugin Manager**, premi **+** e scrivi `https://cdn.jsdelivr.net/gh/TUONOME/fontra-compose-accents@v1.0.0`.
+3. Crea una release con tag `v1.1.0`.
+4. In Fontra apri **Fontra → Plugin Manager**, premi **+** e scrivi `https://cdn.jsdelivr.net/gh/TUONOME/fontra-compose-accents@v1.1.0`.
 5. Ricarica l'editor.
+
+Per aggiornare dalla 1.0.0: crea la release `v1.1.0`, rimuovi dal Plugin Manager l'indirizzo con `@v1.0.0` e aggiungi quello nuovo. Poi, nella panoramica, usa **Assegna gruppi di kerning dalle lettere base** per le accentate che hai già composto.
