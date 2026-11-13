@@ -100,8 +100,10 @@ Il kerning fatto direttamente su una coppia di glifi, senza gruppi (per esempio 
 
 1. Crea un repository **pubblico** su GitHub, per esempio `fontra-compose-accents`.
 2. Carica `plugin.json` e `compose-accents.js` (va bene anche questo README) nella radice del repository.
-3. Crea una release con tag `v1.1.0`.
-4. In Fontra apri **Fontra → Plugin Manager**, premi **+** e scrivi `https://cdn.jsdelivr.net/gh/TUONOME/fontra-compose-accents@v1.1.0`.
+3. Crea una release con tag `v1.1.1`.
+4. In Fontra apri **Fontra → Plugin Manager**, premi **+** e scrivi `https://cdn.jsdelivr.net/gh/TUONOME/fontra-compose-accents@v1.1.1`.
 5. Ricarica l'editor.
 
-Per aggiornare dalla 1.0.0: crea la release `v1.1.0`, rimuovi dal Plugin Manager l'indirizzo con `@v1.0.0` e aggiungi quello nuovo. Poi, nella panoramica, usa **Assegna gruppi di kerning dalle lettere base** per le accentate che hai già composto.
+Per aggiornare dalla 1.1.0: crea la release `v1.1.1` e sostituisci l'indirizzo nel Plugin Manager. Con la 1.1.1 l'allineamento automatico e i gruppi delle accentate seguono anche le modifiche fatte nella panoramica (per esempio dalla sezione "Margini e gruppi di kerning" di Testi di kerning 1.1.0).
+
+Per aggiornare dalla 1.0.0: crea la release `v1.1.1`, rimuovi dal Plugin Manager l'indirizzo con `@v1.0.0` e aggiungi quello nuovo. Poi, nella panoramica, usa **Assegna gruppi di kerning dalle lettere base** per le accentate che hai già composto.

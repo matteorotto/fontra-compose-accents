@@ -696,6 +696,18 @@ function setAutoAlignFlag(varGlyph, glyphName, value, builder) {
   builder.set(["glyphs", glyphName, "customData"], AUTO_ALIGN_KEY, value, current);
 }
 
+// Il kerning va caricato sempre passando da getKerningController: Fontra tiene
+// una sola richiesta in corso. Due getKerning() contemporanei, mentre il font si
+// carica, scaricano due copie e la seconda può cancellare una modifica appena fatta.
+async function loadKerning(fontController) {
+  try {
+    await fontController.getKerningController("kern");
+  } catch (error) {
+    // nessun kerning: getKerning() restituisce comunque l'oggetto vuoto
+  }
+  return await fontController.getKerning();
+}
+
 // ---------------------------------------------------------------------------
 // Gruppi di kerning: l'accentata va negli stessi gruppi della lettera base
 // ---------------------------------------------------------------------------
@@ -748,7 +760,7 @@ async function planGroupSync(fontController, entries, builder) {
   if (!entries.length) return report;
   let table;
   try {
-    table = (await fontController.getKerning())?.kern;
+    table = (await loadKerning(fontController))?.kern;
   } catch (error) {
     table = null;
   }
@@ -793,7 +805,7 @@ async function planGroupSync(fontController, entries, builder) {
 function listenForGroupChanges(fontController) {
   // La panoramica di Fontra non riceve le modifiche al kerning fatte nelle altre
   // finestre: senza questa iscrizione lavorerebbe su gruppi vecchi.
-  Promise.resolve(fontController.getKerning?.())
+  loadKerning(fontController)
     .then(() => fontController.subscribeChanges?.({ kerning: null }, false))
     .catch(() => {});
   fontController.addChangeListener(
@@ -1116,7 +1128,7 @@ class GroupFollower {
   constructor(fontController) {
     this.fontController = fontController;
     this.snapshot = null;
-    fontController.getKerning?.().then(
+    loadKerning(fontController).then(
       (kerning) => (this.snapshot = snapshotGroups(kerning?.kern)),
       () => {}
     );
@@ -1129,7 +1141,7 @@ class GroupFollower {
 
   async onChange(change, isExternalChange) {
     try {
-      const kerning = await this.fontController.getKerning();
+      const kerning = await loadKerning(this.fontController);
       const next = snapshotGroups(kerning?.kern);
       const previous = this.snapshot;
       this.snapshot = next;
@@ -1470,6 +1482,10 @@ class OverviewComposeAccents {
     this.fontController = controller.fontController;
     loadGlyphData();
     listenForGroupChanges(this.fontController);
+    // Anche le modifiche fatte qui (margini, larghezze, gruppi dalla barra a
+    // sinistra) riallineano le accentate e ne aggiornano i gruppi
+    this.aligner = new AutoAligner(this.fontController);
+    this.groupFollower = new GroupFollower(this.fontController);
     this.installMenuItems();
     this.installChunkedUndo();
     installAnchorShortcut((reset) => this.setAnchors(reset));
